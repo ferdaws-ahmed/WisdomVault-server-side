@@ -44,6 +44,7 @@ const client = new MongoClient(uri, {
 let db;
 let usersCollection;
 let postsCollection;
+let publicLessonsCollection; 
 
 /* ==============================
    Verify Firebase Token Middleware
@@ -71,7 +72,19 @@ app.get("/", (req, res) => {
   res.send("Backend is working!");
 });
 
-// Add a post
+/* ---------- PUBLIC LESSONS ---------- */
+// MongoDB → public-lesson collection
+app.get("/lessons", async (req, res) => {
+  try {
+    const lessons = await publicLessonsCollection.find().toArray();
+    res.json(lessons);
+  } catch (error) {
+    console.error("Failed to fetch lessons:", error);
+    res.status(500).json({ message: "Failed to fetch lessons" });
+  }
+});
+
+/* ---------- POSTS ---------- */
 app.post("/add-post", verifyFirebaseToken, async (req, res) => {
   try {
     const post = {
@@ -88,7 +101,6 @@ app.post("/add-post", verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Get all posts
 app.get("/posts", async (req, res) => {
   try {
     const posts = await postsCollection.find().toArray();
@@ -99,7 +111,7 @@ app.get("/posts", async (req, res) => {
   }
 });
 
-// Create or update user
+/* ---------- USERS ---------- */
 app.post("/users", verifyFirebaseToken, async (req, res) => {
   try {
     const { uid, email, name } = req.decoded;
@@ -123,7 +135,6 @@ app.post("/users", verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Get user by UID
 app.get("/users/:uid", verifyFirebaseToken, async (req, res) => {
   try {
     if (req.params.uid !== req.decoded.uid) {
@@ -146,9 +157,12 @@ const port = process.env.PORT || 3000;
 async function start() {
   try {
     await client.connect();
-    db = client.db("wisdomVaultDB"); // database name
+    db = client.db("wisdomVaultDB");
+
     usersCollection = db.collection("users");
     postsCollection = db.collection("posts");
+    publicLessonsCollection = db.collection("public-lesson"); 
+
     console.log("✅ MongoDB Connected");
 
     app.listen(port, () => console.log(`🚀 Server running on ${port}`));
