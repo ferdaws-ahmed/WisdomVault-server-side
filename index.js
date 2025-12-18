@@ -84,6 +84,63 @@ app.get("/lessons", async (req, res) => {
   }
 });
 
+
+/* ---------- TOP CONTRIBUTORS ---------- */
+app.get("/top-contributors", async (req, res) => {
+  try {
+    const pipeline = [
+      // 1️⃣ only public lessons
+      {
+        $match: {
+          visibility: "public",
+        },
+      },
+
+      // 2️⃣ group by creator
+      {
+        $group: {
+          _id: "$creator.name",
+          photo: { $first: "$creator.photo" },
+          totalLessons: { $sum: 1 },
+          totalLikes: { $sum: "$likesCount" },
+          totalFavorites: { $sum: "$favoritesCount" },
+        },
+      },
+
+      // 3️⃣ score calculation
+      {
+        $addFields: {
+          score: {
+            $add: [
+              { $multiply: ["$totalLessons", 5] },
+              { $multiply: ["$totalLikes", 1] },
+              { $multiply: ["$totalFavorites", 2] },
+            ],
+          },
+        },
+      },
+
+      // 4️⃣ sort & limit (TOP 7)
+      { $sort: { score: -1 } },
+      { $limit: 7 },
+    ];
+
+    const contributors = await publicLessonsCollection
+      .aggregate(pipeline)
+      .toArray();
+
+    res.json(contributors);
+  } catch (error) {
+    console.error("Top contributors error:", error);
+    res.status(500).json({ message: "Failed to load contributors" });
+  }
+});
+
+
+
+
+
+
 /* ---------- POSTS ---------- */
 app.post("/add-post", verifyFirebaseToken, async (req, res) => {
   try {
