@@ -73,7 +73,14 @@ const verifyFirebaseToken = async (req, res, next) => {
     console.error("Token verification error:", error);
     res.status(401).json({ message: "Invalid Token" });
   }
+
+   
 };
+
+
+
+
+
 
 /* ==============================
    IMAGE UPLOAD CONFIG
@@ -311,6 +318,293 @@ app.get("/lessons", async (req, res) => {
     res.status(500).json({ message: "Failed to fetch lessons" });
   }
 });
+
+
+
+
+
+
+
+
+// ======================= TEST ADMIN DASHBOARD =======================
+app.get("/admin/dashboard-stats", async (req, res) => {
+  try {
+    const totalUsers = await usersCollection.countDocuments();
+    const totalLessons = await publicLessonsCollection.countDocuments();
+    const reportedLessons = await publicLessonsCollection.countDocuments({ isReported: true });
+
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const weeklyCount = await publicLessonsCollection.countDocuments({
+      createdAt: { $gte: oneWeekAgo },
+    });
+
+    res.json({
+      totalUsers,
+      totalLessons,
+      reportedLessons,
+      weeklyGrowth: `+${weeklyCount}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to load admin stats" });
+  }
+});
+
+app.get("/admin/recent-users", async (req, res) => {
+  try {
+    const users = await usersCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .project({ name: 1, email: 1, createdAt: 1 })
+      .toArray();
+
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch recent users" });
+  }
+});
+
+app.get("/admin/recent-lessons", async (req, res) => {
+  try {
+    const lessons = await publicLessonsCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .project({ title: 1, visibility: 1, createdAt: 1 })
+      .toArray();
+
+    res.json(lessons);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch recent lessons" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+/* ---------- GET ALL USERS ---------- */
+app.get("/admin/manage-users", verifyFirebaseToken, async (req, res) => {
+  try {
+    const adminUser = await usersCollection.findOne({ email: req.decoded.email });
+    if (adminUser?.role !== "admin") return res.status(403).json({ message: "Forbidden" });
+
+    const users = await usersCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .project({ name: 1, email: 1, role: 1 })
+      .toArray();
+
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
+});
+
+/* ---------- DELETE USER ---------- */
+app.delete("/admin/manage-users/:email", verifyFirebaseToken, async (req, res) => {
+  try {
+    const adminUser = await usersCollection.findOne({ email: req.decoded.email });
+    if (adminUser?.role !== "admin") return res.status(403).json({ message: "Forbidden" });
+
+    const email = req.params.email;
+    await usersCollection.deleteOne({ email });
+    await publicLessonsCollection.deleteMany({ "creator.email": email });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to delete user" });
+  }
+});
+
+/* ---------- PROMOTE USER TO ADMIN ---------- */
+app.put("/admin/manage-users/:email/promote", verifyFirebaseToken, async (req, res) => {
+  try {
+    const adminUser = await usersCollection.findOne({ email: req.decoded.email });
+    if (adminUser?.role !== "admin") return res.status(403).json({ message: "Forbidden" });
+
+    const email = req.params.email;
+    await usersCollection.updateOne({ email }, { $set: { role: "admin" } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to promote user" });
+  }
+});
+
+
+
+
+
+
+
+// ================== ADMIN MANAGE USERS TEST ==================
+app.get("/admin/manage-users-test", async (req, res) => {
+  try {
+    const users = await usersCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .project({ name: 1, email: 1, role: 1, createdAt: 1 })
+      .toArray();
+
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch users" });
+  }
+});
+
+
+
+app.delete("/admin/users/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    await usersCollection.deleteOne({ email });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to delete user" });
+  }
+});
+
+
+
+
+app.patch("/admin/users/promote/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    const { role } = req.body; // premium
+
+    await usersCollection.updateOne(
+      { email },
+      { $set: { role } }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to promote user" });
+  }
+});
+
+
+
+// ================= UPDATE USER ROLE =================
+app.patch("/admin/users/role/:email", async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email);
+    const { role } = req.body;
+
+    if (!role) {
+      return res.status(400).send({ message: "Role is required" });
+    }
+
+    const result = await usersCollection.updateOne(
+      { email },
+      { $set: { role } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    res.send({ success: true, role });
+  } catch (error) {
+    res.status(500).send({ message: "Failed to update role" });
+  }
+});
+
+
+
+
+
+
+
+
+/* ---------- ADMIN: GET ALL LESSONS ---------- */
+app.get("/admin/manage-lessons", async (req, res) => {
+  try {
+    const lessons = await publicLessonsCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .project({
+        title: 1,
+        category: 1,
+        visibility: 1,
+        accessLevel: 1,
+        createdAt: 1,
+      })
+      .toArray();
+
+    res.json(lessons);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to load lessons" });
+  }
+});
+
+
+/* ---------- ADMIN: DELETE LESSON ---------- */
+app.delete("/admin/lessons/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    await publicLessonsCollection.deleteOne({ _id: new ObjectId(id) });
+    await myLessonsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to delete lesson" });
+  }
+});
+
+
+
+/* ---------- ADMIN: UPDATE LESSON ACCESS ---------- */
+app.patch("/admin/lessons/access/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { accessLevel } = req.body;
+
+    if (!["premium", "free"].includes(accessLevel)) {
+      return res.status(400).json({ message: "Invalid access level" });
+    }
+
+    await publicLessonsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { accessLevel } }
+    );
+
+    await myLessonsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { accessLevel } }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to update access" });
+  }
+});
+
+
+
+
+
+
+
 
 /* ---------- DASHBOARD OVERVIEW ---------- */
 app.get("/dashboard/overview", verifyFirebaseToken, async (req, res) => {

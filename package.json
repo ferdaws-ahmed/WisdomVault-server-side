@@ -201,6 +201,7 @@
     "string-width-cjs": "^4.2.3",
     "strip-ansi": "^6.0.1",
     "strip-ansi-cjs": "^6.0.1",
+    "stripe": "^20.1.0",
     "strnum": "^1.1.2",
     "stubs": "^3.0.0",
     "supports-color": "^5.5.0",
