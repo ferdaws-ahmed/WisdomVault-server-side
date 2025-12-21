@@ -14,8 +14,9 @@ const app = express();
     Middlewares
 ================================ */
 app.use(cors({
-    origin: ["http://localhost:5173","https://wisdomvaultserver.vercel.app/","https://wisdom-vault-client-side.vercel.app/"],
-    credentials: true,
+    origin: "*", 
+    methods: ["GET", "POST", "PATCH", "DELETE", "PUT"],
+    credentials: true
 }));
 
 // Stripe Webhook (express.json() 
