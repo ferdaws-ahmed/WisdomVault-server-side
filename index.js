@@ -3,46 +3,33 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 require("dotenv").config();
-
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 
-/* ==============================
-    Middlewares
-================================ */
+
+//  CORS
 app.use(cors({
-    origin: "*", 
-    methods: ["GET", "POST", "PATCH", "DELETE", "PUT"],
-    credentials: true
+  origin: ["http://localhost:5173", "https://wisdom-vault-client-side.vercel.app"],
+  credentials: true
 }));
 
-// Stripe Webhook (express.json() 
+
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
-
-    try {
-        event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    } catch (err) {
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    if (event.type === "checkout.session.completed") {
-        const session = event.data.object;
-        const userEmail = session.customer_details.email; 
-
-        if (usersCollection) {
-            await usersCollection.updateOne(
-                { email: userEmail },
-                { $set: { isPremium: true, role: "premium", transactionId: session.payment_intent } }
-            );
-        }
-    }
-    res.json({ received: true });
+  const sig = req.headers["stripe-signature"];
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+ 
+  res.json({ received: true });
 });
+
+
 app.use(express.json());
 
 /* ==============================
@@ -74,31 +61,48 @@ const uploadToCloudinary = (fileBuffer, filename) => {
   });
 };
 
+
 /* ==============================
-    Firebase Admin Setup
+    Firebase Setup
 ================================ */
 const rawKey = process.env.FIREBASE_PRIVATE_KEY;
-const formattedKey = rawKey ? rawKey.replace(/^"(.*)"$/, '$1').replace(/\\n/g, '\n') : undefined;
+const formattedKey = rawKey ? rawKey.replace(/\\n/g, '\n') : undefined;
 
 if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert({
-            projectId: process.env.FIREBASE_PROJECT_ID,
-            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-            privateKey: formattedKey,
-        }),
-    });
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: formattedKey,
+    }),
+  });
 }
 
 /* ==============================
-    MongoDB Setup
+    MongoDB & Collections Setup
 ================================ */
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.wtnhlvb.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, {
-    serverApi: { version: ServerApiVersion.v1, deprecationErrors: true },
+  serverApi: { version: ServerApiVersion.v1, deprecationErrors: true },
 });
 
 let usersCollection, postsCollection, publicLessonsCollection, myLessonsCollection;
+
+// Vercel এর জন্য কানেকশন মিডলওয়্যার
+async function connectDB(req, res, next) {
+  if (!usersCollection) {
+    await client.connect();
+    const db = client.db("wisdomVaultDB");
+    usersCollection = db.collection("users");
+    postsCollection = db.collection("posts");
+    publicLessonsCollection = db.collection("public-lesson");
+    myLessonsCollection = db.collection("my-lessons");
+  }
+  next();
+}
+
+// সব রাউটের জন্য ডাটাবেজ কানেকশন নিশ্চিত করা
+app.use(connectDB);
 
 /* ==============================
     Verify Token Middleware
