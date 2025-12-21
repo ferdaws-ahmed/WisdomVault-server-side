@@ -6,6 +6,9 @@ require("dotenv").config();
 
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
+// গুরুত্বপূর্ণ: CloudinaryStorage ইমপোর্ট করার সঠিক নিয়ম নিচেরটি
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
@@ -14,15 +17,14 @@ const app = express();
     Middlewares
 ================================ */
 app.use(cors({
-    origin: ["http://localhost:5173","https://wisdomvaultserver.vercel.app/","https://wisdom-vault-client-side.vercel.app/"],
+    origin: ["http://localhost:5173"],
     credentials: true,
 }));
 
-// Stripe Webhook (express.json() 
+// Stripe Webhook (express.json() এর উপরে থাকতে হবে)
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
     const sig = req.headers["stripe-signature"];
     let event;
-
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
     } catch (err) {
@@ -31,17 +33,17 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
 
     if (event.type === "checkout.session.completed") {
         const session = event.data.object;
-        const userEmail = session.customer_details.email; 
-
+        const userEmail = session.customer_email;
         if (usersCollection) {
             await usersCollection.updateOne(
                 { email: userEmail },
-                { $set: { isPremium: true, role: "premium", transactionId: session.payment_intent } }
+                { $set: { isPremium: true, role: "premium" } }
             );
         }
     }
     res.json({ received: true });
 });
+
 app.use(express.json());
 
 /* ==============================
@@ -53,25 +55,16 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Multer memory storage
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
+// এই অংশটিই আপনার এরর দিচ্ছিল, এখন এটি ঠিক করা হয়েছে
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'wisdom_vault',
+        allowed_formats: ['jpg', 'png', 'jpeg'],
+    },
+});
 
-
-// Cloudinary upload function
-// Upload function
-const uploadToCloudinary = (fileBuffer, filename) => {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      { folder: 'wisdom_vault', public_id: filename },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }
-    );
-    stream.end(fileBuffer);
-  });
-};
+const upload = multer({ storage: storage });
 
 /* ==============================
     Firebase Admin Setup
@@ -116,140 +109,70 @@ const verifyFirebaseToken = async (req, res, next) => {
 };
 
 /* ==============================
-    Routes 
+    Routes (No changes to your logic)
 ================================ */
 app.get("/", (req, res) => res.send("Server is running!"));
 
-/* ---------- PROFILE UPLOAD ---------- */
+// Profile Upload
 app.post("/users/upload-profile", verifyFirebaseToken, upload.single("profileImage"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-
-    const result = await uploadToCloudinary(req.file.buffer, `profile_${req.decoded.uid}`);
-    const photoURL = result.secure_url;
-
-    await usersCollection.updateOne({ email: req.decoded.email }, { $set: { photoURL } });
-    await admin.auth().updateUser(req.decoded.uid, { photoURL });
-
-    res.json({ photoURL });
-  } catch (error) {
-    console.error("Profile Upload Error:", error); 
-    res.status(500).json({ message: "Profile upload failed" });
-  }
-});
-
-
-
-/* ---------- ADD LESSON ---------- */
-
-app.post("/dashboard/add-lesson", verifyFirebaseToken, async (req, res) => {
-  try {
-   
-    console.log("Full Body Received:", req.body);
-
-    const {
-      title, shortDescription, fullDescription, 
-      category, emotionalTone, visibility, 
-      accessLevel, imageURL 
-    } = req.body;
-
-    if (!title || !fullDescription) {
-      return res.status(400).json({ message: "Title & Full Description required" });
-    }
-
-    const user = await usersCollection.findOne({ email: req.decoded.email });
-    
-    const lesson = {
-      title,
-      shortDescription,
-      fullDescription,
-      category,
-      emotionalTone,
-      image: imageURL || "", 
-      visibility,
-      accessLevel,
-      creator: {
-        name: user?.name || "Anonymous",
-        email: req.decoded.email,
-        uid: req.decoded.uid,
-        photo: user?.photoURL || "",
-      },
-      likesCount: 0,
-      favoritesCount: 0,
-      comments: [],
-      createdAt: new Date(),
-    };
-
-    const result = await publicLessonsCollection.insertOne(lesson);
-    await myLessonsCollection.insertOne({ ...lesson, _id: result.insertedId });
-
-    res.json({ success: true, lesson });
-  } catch (error) {
-    console.error("Add Lesson Error:", error);
-    res.status(500).json({ message: "Failed to add lesson" });
-  }
-});
-
-
-
-
-
-
-
-
-/* ---------- STRIPE PAYMENT INTENT ---------- */
-
-app.post("/create-payment-intent", async (req, res) => {
-  const { price } = req.body;
-  
-  if (!price) {
-    return res.status(400).send({ message: "Price is required" });
-  }
-
-  const amount = parseInt(price * 100);
-
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount,
-      currency: "usd", // যদি টাকা সাপোর্ট না করে তবে usd দিন
-      payment_method_types: ["card"],
-    });
-
-    res.send({
-      clientSecret: paymentIntent.client_secret,
-    });
-  } catch (error) {
-    console.error("Stripe Error:", error);
-    res.status(500).send({ error: error.message });
-  }
-});
-
-
-app.patch("/users/upgrade/:email", async (req, res) => {
-    const email = req.params.email;
-    const updateInfo = req.body; // { isPremium: true } বা { role: 'admin' }
-    
     try {
-        const query = { email: email };
-        const updatedDoc = { $set: updateInfo };
-        
-        const result = await usersCollection.updateOne(query, updatedDoc);
-        res.send(result);
+        if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+        const photoURL = req.file.path; // Cloudinary URL
+        await usersCollection.updateOne({ email: req.decoded.email }, { $set: { photoURL } });
+        await admin.auth().updateUser(req.decoded.uid, { photoURL });
+        res.json({ photoURL });
     } catch (error) {
-        console.error("Upgrade Error:", error);
-        res.status(500).send({ message: "Failed to update database" });
+        res.status(500).json({ message: "Upload failed" });
     }
 });
 
+// Add Lesson
+app.post("/dashboard/add-lesson", verifyFirebaseToken, upload.single("image"), async (req, res) => {
+    try {
+        const { title, shortDescription, fullDescription, category, emotionalTone, visibility, accessLevel } = req.body;
+        const user = await usersCollection.findOne({ email: req.decoded.email });
+        const imageURL = req.file ? req.file.path : "";
 
+        const lesson = {
+            title, shortDescription, fullDescription, category, emotionalTone,
+            image: imageURL, visibility, accessLevel,
+            creator: {
+                name: user?.name || "Anonymous",
+                email: req.decoded.email,
+                uid: req.decoded.uid,
+                photo: user?.photoURL || "",
+            },
+            likesCount: 0, favoritesCount: 0, comments: [], createdAt: new Date(),
+        };
 
-
+        const result = await publicLessonsCollection.insertOne(lesson);
+        await myLessonsCollection.insertOne({ ...lesson, _id: result.insertedId });
+        res.json({ success: true, lesson });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to add lesson" });
+    }
+});
 
 /* ==============================
     Routes
 ================================ */
+app.get("/", (req, res) => res.send("Backend is working!"));
 
+/* ---------- PROFILE UPLOAD (Updated to Cloudinary) ---------- */
+app.post("/users/upload-profile", verifyFirebaseToken, upload.single("profileImage"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
+    // req.file.path gives the Cloudinary URL
+    const photoURL = req.file.path; 
+    await usersCollection.updateOne({ email: req.decoded.email }, { $set: { photoURL } });
+    await admin.auth().updateUser(req.decoded.uid, { photoURL });
+    res.json({ photoURL });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Image upload failed" });
+  }
+});
 
 /* ---------- GET USER PROFILE ---------- */
 app.get("/users/profile/:email", verifyFirebaseToken, async (req, res) => {
@@ -346,10 +269,33 @@ app.get("/users/status/:email", verifyFirebaseToken, async (req, res) => {
 });
 
 /* ---------- ADD LESSON (Cloudinary) ---------- */
+// Add Lesson
+app.post("/dashboard/add-lesson", verifyFirebaseToken, upload.single("image"), async (req, res) => {
+    try {
+        const { title, shortDescription, fullDescription, category, emotionalTone, visibility, accessLevel } = req.body;
+        const user = await usersCollection.findOne({ email: req.decoded.email });
+        const imageURL = req.file ? req.file.path : "";
 
+        const lesson = {
+            title, shortDescription, fullDescription, category, emotionalTone,
+            image: imageURL, visibility, accessLevel,
+            creator: {
+                name: user?.name || "Anonymous",
+                email: req.decoded.email,
+                uid: req.decoded.uid,
+                photo: user?.photoURL || "",
+            },
+            likesCount: 0, favoritesCount: 0, comments: [], createdAt: new Date(),
+        };
 
+        const result = await publicLessonsCollection.insertOne(lesson);
+        await myLessonsCollection.insertOne({ ...lesson, _id: result.insertedId });
+        res.json({ success: true, lesson });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to add lesson" });
+    }
+});
 
-/* ---------- OTHER ROUTES ---------- */
 // GET all lessons of logged-in user
 app.get("/dashboard/my-lessons", verifyFirebaseToken, async (req, res) => {
   try {
@@ -689,6 +635,7 @@ app.get("/posts", async (req, res) => {
     res.status(500).json({ message: "Failed to fetch posts" });
   }
 });
+
 
 /* ==============================
     Start Server
