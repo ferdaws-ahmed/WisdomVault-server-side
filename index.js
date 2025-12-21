@@ -1,6 +1,4 @@
-/* ==============================
-   index.js (Backend Ready Version)
-================================ */
+
 
 const express = require("express");
 const cors = require("cors");
@@ -26,17 +24,25 @@ app.use(
 app.use(express.json());
 
 /* ==============================
-   Firebase Admin Setup
+    Firebase Admin Setup
 ================================ */
-admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY
-      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
-      : undefined,
-  }),
-});
+const rawKey = process.env.FIREBASE_PRIVATE_KEY;
+
+
+const formattedKey = rawKey 
+  ? rawKey.replace(/^"(.*)"$/, '$1').replace(/\\n/g, '\n') 
+  : undefined;
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: formattedKey,
+    }),
+  });
+  console.log("✅ Firebase Admin Initialized Successfully!");
+}
 
 /* ==============================
    MongoDB Setup
@@ -45,7 +51,7 @@ const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
-    strict: true,
+    
     deprecationErrors: true,
   },
 });
@@ -63,20 +69,18 @@ const verifyFirebaseToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "Unauthorized" });
+      return res.status(401).json({ message: "Unauthorized access" });
     }
 
     const token = authHeader.split(" ")[1];
-    req.decoded = await admin.auth().verifyIdToken(token);
-    next();
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.decoded = decodedToken;
+    next(); 
   } catch (error) {
     console.error("Token verification error:", error);
-    res.status(401).json({ message: "Invalid Token" });
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
-
-   
 };
-
 
 
 
@@ -159,35 +163,64 @@ app.get("/users/profile/:email", verifyFirebaseToken, async (req, res) => {
 /* ---------- UPDATE PROFILE ---------- */
 app.put("/users/update-profile", verifyFirebaseToken, async (req, res) => {
   try {
-    const email = req.decoded.email;
+    const { uid, email } = req.decoded; 
     const { name, photoURL } = req.body;
-    const result = await usersCollection.updateOne({ email }, { $set: { name, photoURL } });
-    res.json({ success: true, modifiedCount: result.modifiedCount });
+
+    
+    await usersCollection.updateOne(
+      { email },
+      { $set: { name, photoURL } }
+    );
+
+   
+    await admin.auth().updateUser(uid, {
+      displayName: name,
+      photoURL: photoURL
+    });
+
+    res.json({ success: true, message: "Updated in both DB and Firebase" });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Failed to update profile" });
+    console.error("Firebase/DB Update Error:", error);
+    res.status(500).json({ message: "Update failed" });
   }
 });
 
-/* ---------- CREATE / SYNC USER ---------- */
+
+
+
+
+/* ------ create user/ Sync ---------*/
 app.post("/users", verifyFirebaseToken, async (req, res) => {
   try {
-    const { uid, email, name } = req.decoded;
+    const { uid, email } = req.decoded; 
+    const { name, photoURL } = req.body; 
+
     const existingUser = await usersCollection.findOne({ uid });
+
     if (!existingUser) {
-      await usersCollection.insertOne({
-        uid,
-        email,
+      
+      const newUser = {
+        uid: uid,
+        email: email,
         name: name || "Anonymous",
         role: "user",
         isPremium: false,
-        createdAt: new Date(),
-      });
+        createdAt: new Date(), 
+        photoURL: photoURL || "", 
+      };
+      await usersCollection.insertOne(newUser);
+    } else {
+      
+      if (existingUser.name === "Anonymous" && name) {
+        await usersCollection.updateOne(
+          { uid },
+          { $set: { name: name, photoURL: photoURL || existingUser.photoURL } }
+        );
+      }
     }
     res.json({ success: true });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Failed to sync user" });
+    res.status(500).json({ message: "Sync failed" });
   }
 });
 
