@@ -3,21 +3,22 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 require("dotenv").config();
+
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 
-/* ==============================
-   CORS Setup
-================================ */
+
+//  CORS
 app.use(cors({
   origin: ["http://localhost:5173", "https://wisdom-vault-client-side.vercel.app"],
-  credentials: true,
+  credentials: true
 }));
 
-/* ==============================
-   Webhook Setup
-================================ */
+
+
+//webhook
+
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
@@ -26,19 +27,20 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
   } catch (err) {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
+ 
   res.json({ received: true });
 });
 
-/* ==============================
-   Body Parser
-================================ */
+
 app.use(express.json());
 
+
+
 /* ==============================
-   Firebase Setup
+    Firebase Setup
 ================================ */
 const rawKey = process.env.FIREBASE_PRIVATE_KEY;
-const formattedKey = rawKey ? rawKey.replace(/\\n/g, "\n") : undefined;
+const formattedKey = rawKey ? rawKey.replace(/\\n/g, '\n') : undefined;
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -51,31 +53,40 @@ if (!admin.apps.length) {
 }
 
 /* ==============================
-   MongoDB Setup
+    MongoDB & Collections Setup
 ================================ */
+
+
+
+
+
+
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.wtnhlvb.mongodb.net/?retryWrites=true&w=majority&connectTimeoutMS=30000`; 
 
 const client = new MongoClient(uri, {
   serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
 });
 
+
+
 let db;
-let usersCollection, postsCollection, publicLessonsCollection, myLessonsCollection;
 
 async function connectDB() {
   if (!db) {
+    client = new MongoClient(uri);
     await client.connect();
     db = client.db("wisdomVaultDB");
+
     usersCollection = db.collection("users");
     postsCollection = db.collection("posts");
     publicLessonsCollection = db.collection("public-lesson");
     myLessonsCollection = db.collection("my-lessons");
-    console.log("✅ MongoDB Connected");
+
+    console.log("✅ MongoDB Connected Once");
   }
 }
 
-// Connect once at server start
-connectDB().catch(err => console.error("MongoDB Connection Failed:", err));
+
 
 app.use(async (req, res, next) => {
   try {
@@ -86,47 +97,55 @@ app.use(async (req, res, next) => {
   }
 });
 
-/* ==============================
-   Global Error Handler
-================================ */
+
+
+
+
+
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({
-    success: false,
+  res.status(500).json({ 
+    success: false, 
     message: "Something went wrong!",
-    error: err.message,
+    error: err.message 
   });
 });
 
 /* ==============================
-   Verify Firebase Token Middleware
+    Verify Token Middleware
 ================================ */
 const verifyFirebaseToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ message: "Unauthorized" });
-    const token = authHeader.split(" ")[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    req.decoded = decodedToken;
-    next();
-  } catch (error) {
-    return res.status(401).json({ message: "Invalid token" });
-  }
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ message: "Unauthorized" });
+        const token = authHeader.split(" ")[1];
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        req.decoded = decodedToken;
+        next();
+    } catch (error) {
+        return res.status(401).json({ message: "Invalid token" });
+    }
 };
 
 /* ==============================
-   Routes
+    Routes 
 ================================ */
 app.get("/", (req, res) => res.send("Server is running!"));
 
 
+
+
 /* ---------- ADD LESSON ---------- */
+
 app.post("/dashboard/add-lesson", verifyFirebaseToken, async (req, res) => {
   try {
+   
+    console.log("Full Body Received:", req.body);
+
     const {
       title, shortDescription, fullDescription, 
       category, emotionalTone, visibility, 
-      accessLevel, imageURL
+      accessLevel, imageURL 
     } = req.body;
 
     if (!title || !fullDescription) {
@@ -134,14 +153,14 @@ app.post("/dashboard/add-lesson", verifyFirebaseToken, async (req, res) => {
     }
 
     const user = await usersCollection.findOne({ email: req.decoded.email });
-
+    
     const lesson = {
       title,
       shortDescription,
       fullDescription,
       category,
       emotionalTone,
-      image: imageURL || "",
+      image: imageURL || "", 
       visibility,
       accessLevel,
       creator: {
@@ -167,20 +186,33 @@ app.post("/dashboard/add-lesson", verifyFirebaseToken, async (req, res) => {
 });
 
 
+
+
+
+
+
+
 /* ---------- STRIPE PAYMENT INTENT ---------- */
+
 app.post("/create-payment-intent", async (req, res) => {
   const { price } = req.body;
-  if (!price) return res.status(400).send({ message: "Price is required" });
+  
+  if (!price) {
+    return res.status(400).send({ message: "Price is required" });
+  }
 
   const amount = parseInt(price * 100);
 
   try {
     const paymentIntent = await stripe.paymentIntents.create({
-      amount,
-      currency: "usd",
+      amount: amount,
+      currency: "usd", 
       payment_method_types: ["card"],
     });
-    res.send({ clientSecret: paymentIntent.client_secret });
+
+    res.send({
+      clientSecret: paymentIntent.client_secret,
+    });
   } catch (error) {
     console.error("Stripe Error:", error);
     res.status(500).send({ error: error.message });
@@ -188,40 +220,33 @@ app.post("/create-payment-intent", async (req, res) => {
 });
 
 
-
-app.patch("/users/upgrade/:email", verifyFirebaseToken, async (req, res) => {
-  try {
+app.patch("/users/upgrade/:email", async (req, res) => {
+    const email = req.params.email;
+    const updateInfo = req.body; 
     
-    const email = decodeURIComponent(req.params.email);
-    const { isPremium, role } = req.body;
-
-    console.log("Request to upgrade email:", email); 
-
-    
-    const result = await usersCollection.updateOne(
-      { email: email }, 
-      { $set: { isPremium: isPremium, role: role } }
-    );
-
-    if (result.matchedCount === 0) {
-      console.log("No user found with this email in DB");
-      return res.status(404).json({ success: false, message: "User not found" });
+    try {
+        const query = { email: email };
+        const updatedDoc = { $set: updateInfo };
+        
+        const result = await usersCollection.updateOne(query, updatedDoc);
+        res.send(result);
+    } catch (error) {
+        console.error("Upgrade Error:", error);
+        res.status(500).send({ message: "Failed to update database" });
     }
-
-    res.json({ success: true, message: "User upgraded!" });
-  } catch (error) {
-    console.error("Upgrade Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
 });
 
 
 
 
 
+/* ==============================
+    Routes
+================================ */
 
 
-/* ---------- USER PROFILE ---------- */
+
+/* ---------- GET USER PROFILE ---------- */
 app.get("/users/profile/:email", verifyFirebaseToken, async (req, res) => {
   try {
     const email = req.params.email;
@@ -246,15 +271,21 @@ app.get("/users/profile/:email", verifyFirebaseToken, async (req, res) => {
   }
 });
 
-
 /* ---------- UPDATE PROFILE ---------- */
 app.put("/users/update-profile", verifyFirebaseToken, async (req, res) => {
   try {
-    const { uid, email } = req.decoded;
+    const { uid, email } = req.decoded; 
     const { name, photoURL } = req.body;
 
-    await usersCollection.updateOne({ email }, { $set: { name, photoURL } });
-    await admin.auth().updateUser(uid, { displayName: name, photoURL });
+    await usersCollection.updateOne(
+      { email },
+      { $set: { name, photoURL } }
+    );
+
+    await admin.auth().updateUser(uid, {
+      displayName: name,
+      photoURL: photoURL
+    });
 
     res.json({ success: true, message: "Updated in both DB and Firebase" });
   } catch (error) {
@@ -263,31 +294,30 @@ app.put("/users/update-profile", verifyFirebaseToken, async (req, res) => {
   }
 });
 
-
-/* ---------- CREATE / SYNC USER ---------- */
+/* ------ create user/ Sync ---------*/
 app.post("/users", verifyFirebaseToken, async (req, res) => {
   try {
-    const { uid, email } = req.decoded;
-    const { name, photoURL } = req.body;
+    const { uid, email } = req.decoded; 
+    const { name, photoURL } = req.body; 
 
     const existingUser = await usersCollection.findOne({ uid });
 
     if (!existingUser) {
       const newUser = {
-        uid,
-        email,
+        uid: uid,
+        email: email,
         name: name || "Anonymous",
         role: "user",
         isPremium: false,
-        createdAt: new Date(),
-        photoURL: photoURL || "",
+        createdAt: new Date(), 
+        photoURL: photoURL || "", 
       };
       await usersCollection.insertOne(newUser);
     } else {
       if (existingUser.name === "Anonymous" && name) {
         await usersCollection.updateOne(
           { uid },
-          { $set: { name, photoURL: photoURL || existingUser.photoURL } }
+          { $set: { name: name, photoURL: photoURL || existingUser.photoURL } }
         );
       }
     }
@@ -296,8 +326,6 @@ app.post("/users", verifyFirebaseToken, async (req, res) => {
     res.status(500).json({ message: "Sync failed" });
   }
 });
-
-
 
 /* ---------- USER STATUS ---------- */
 app.get("/users/status/:email", verifyFirebaseToken, async (req, res) => {
@@ -311,7 +339,6 @@ app.get("/users/status/:email", verifyFirebaseToken, async (req, res) => {
     res.status(500).json({ message: "Failed to fetch user status" });
   }
 });
-
 
 
 
@@ -658,14 +685,24 @@ app.get("/posts", async (req, res) => {
   }
 });
 
-
-
 /* ==============================
-   Start Server
+    Start Server
 ================================ */
 const port = process.env.PORT || 5000;
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-});
+async function start() {
+    try {
+        await client.connect();
+        const db = client.db("wisdomVaultDB");
+        usersCollection = db.collection("users");
+        postsCollection = db.collection("posts");
+        publicLessonsCollection = db.collection("public-lesson");
+        myLessonsCollection = db.collection("my-lessons");
+        console.log("✅ MongoDB Connected");
+       
+    } catch (error) {
+        console.error("Failed to start server:", error);
+    }
+}
+start();
 
 module.exports = app;
